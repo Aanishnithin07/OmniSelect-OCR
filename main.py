@@ -3,17 +3,33 @@ OmniSelect-OCR Main Application
 Entry point for the desktop OCR utility
 """
 
-import keyboard
+from pynput import keyboard
 from plyer import notification
 from PIL import ImageGrab
 from overlay import SnippingOverlay
 from ocr_engine import extract_text
-import time
+import platform
+import pytesseract
+
+
+def setup_tesseract():
+    """
+    Automatically configure Tesseract path based on the operating system.
+    macOS: Assumes Tesseract is in PATH (installed via Homebrew)
+    Windows: Sets the default installation path
+    """
+    if platform.system() == 'Darwin':  # macOS
+        # On macOS, Tesseract is usually in PATH after Homebrew install
+        pytesseract.pytesseract.tesseract_cmd = 'tesseract'
+    elif platform.system() == 'Windows':
+        # Windows default path
+        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+    # Linux usually auto-detects, so no need to set
 
 
 def on_trigger():
     """
-    Triggered when the user presses the hotkey (Alt+Q).
+    Triggered when the user presses the hotkey (Cmd+Shift+2 on macOS).
     Launches the snipping overlay, captures the selected region,
     performs OCR, and shows a notification.
     """
@@ -63,20 +79,46 @@ def on_trigger():
 def main():
     """
     Main entry point for the application.
-    Sets up the hotkey listener and runs in the background.
+    Sets up Tesseract, the hotkey listener, and runs in the background.
     """
+    # Setup Tesseract for the current OS
+    setup_tesseract()
+    
     print("OmniSelect-OCR is running...")
-    print("Press Alt+Q to capture text from screen")
+    print("Press Cmd+Shift+2 (macOS) or Ctrl+Shift+2 (Windows/Linux) to capture text from screen")
     print("Press Ctrl+C to exit")
     
-    # Register the hotkey (Alt+Q)
-    keyboard.add_hotkey('alt+q', on_trigger)
+    # Define the hotkey combination
+    # For macOS: Cmd+Shift+2
+    # For Windows/Linux: Ctrl+Shift+2
+    if platform.system() == 'Darwin':  # macOS
+        hotkey_combo = {keyboard.Key.cmd, keyboard.Key.shift, keyboard.KeyCode.from_char('2')}
+    else:  # Windows/Linux
+        hotkey_combo = {keyboard.Key.ctrl, keyboard.Key.shift, keyboard.KeyCode.from_char('2')}
     
-    try:
-        # Keep the application running
-        keyboard.wait()
-    except KeyboardInterrupt:
-        print("\nExiting OmniSelect-OCR...")
+    current_keys = set()
+    
+    def on_press(key):
+        """Handle key press events."""
+        current_keys.add(key)
+        
+        # Check if the hotkey combination is pressed
+        if hotkey_combo.issubset(current_keys):
+            on_trigger()
+    
+    def on_release(key):
+        """Handle key release events."""
+        try:
+            current_keys.remove(key)
+        except KeyError:
+            pass
+    
+    # Set up the keyboard listener
+    with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+        try:
+            listener.join()
+        except KeyboardInterrupt:
+            print("\nExiting OmniSelect-OCR...")
 
 
 if __name__ == "__main__":

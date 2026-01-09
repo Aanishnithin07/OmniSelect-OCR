@@ -1,6 +1,6 @@
 pytesseract
 Pillow
 pyperclip
-keyboard
+pynput
 plyer
 pystray
