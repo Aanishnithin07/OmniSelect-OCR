@@ -1,15 +1,21 @@
 """
 OmniSelect-OCR Main Application
-Entry point for the desktop OCR utility
+Thread-safe entry point for the desktop OCR utility
 """
 
 from pynput import keyboard
 from plyer import notification
 from PIL import ImageGrab
+import tkinter as tk
 from overlay import SnippingOverlay
-from ocr_engine import extract_text
+from ocr_engine import extract_text, extract_text_from_region
 import platform
 import pytesseract
+import threading
+
+
+# Global flag for thread-safe hotkey triggering
+TRIGGER_RECEIVED = False
 
 
 def setup_tesseract():
@@ -30,64 +36,58 @@ def setup_tesseract():
 def on_trigger():
     """
     Triggered when the user presses the hotkey (Cmd+Shift+2 on macOS).
-    Launches the snipping overlay, captures the selected region,
-    performs OCR, and shows a notification.
+    This runs on a background thread, so it only sets a flag.
     """
+    global TRIGGER_RECEIVED
+    TRIGGER_RECEIVED = True
+
+
+def process_ocr_in_background(x1, y1, x2, y2):
+    """
+    Process OCR in a background thread to avoid freezing the UI.
     
-    def capture_and_process(x1, y1, x2, y2):
-        """
-        Callback function to handle the captured coordinates.
+    Args:
+        x1, y1, x2, y2: Coordinates of the selected region
+    """
+    thread = threading.Thread(target=extract_text_from_region, args=(x1, y1, x2, y2))
+    thread.daemon = True
+    thread.start()
+
+
+def main_loop_watcher(root):
+    """
+    Runs on the Main Thread. Checks the global flag every 100ms.
+    If the flag is True, launches the SnippingOverlay on the main thread.
+    
+    Args:
+        root: The Tkinter root window (invisible, for main thread management)
+    """
+    global TRIGGER_RECEIVED
+    
+    if TRIGGER_RECEIVED:
+        TRIGGER_RECEIVED = False  # Reset flag
         
-        Args:
-            x1, y1, x2, y2: Coordinates of the selected region
-        """
+        # Launch overlay on main thread
         try:
-            # Capture the screen area
-            screenshot = ImageGrab.grab(bbox=(x1, y1, x2, y2))
-            
-            # Perform OCR on the captured image
-            text = extract_text(screenshot)
-            
-            # Show notification based on result
-            if text:
-                notification.notify(
-                    title="OmniSelect-OCR",
-                    message=f"Text copied to clipboard!\n{text[:50]}...",
-                    app_name="OmniSelect-OCR",
-                    timeout=3
-                )
-            else:
-                notification.notify(
-                    title="OmniSelect-OCR",
-                    message="No text found in selection.",
-                    app_name="OmniSelect-OCR",
-                    timeout=3
-                )
+            overlay = SnippingOverlay()
+            overlay.start_capture(process_ocr_in_background)
         except Exception as e:
+            print(f"Error launching overlay: {e}")
             notification.notify(
-                title="OmniSelect-OCR",
-                message=f"Error: {str(e)}",
+                title="OmniSelect-OCR Error",
+                message=f"Failed to launch overlay: {str(e)}",
                 app_name="OmniSelect-OCR",
                 timeout=3
             )
     
-    # Launch the snipping overlay
-    overlay = SnippingOverlay()
-    overlay.start_capture(capture_and_process)
+    # Schedule next check in 100ms
+    root.after(100, main_loop_watcher, root)
 
 
-def main():
+def start_hotkey_listener():
     """
-    Main entry point for the application.
-    Sets up Tesseract, the hotkey listener, and runs in the background.
+    Start the keyboard listener in a background thread.
     """
-    # Setup Tesseract for the current OS
-    setup_tesseract()
-    
-    print("OmniSelect-OCR is running...")
-    print("Press Cmd+Shift+2 (macOS) or Ctrl+Shift+2 (Windows/Linux) to capture text from screen")
-    print("Press Ctrl+C to exit")
-    
     # Define the hotkey combination
     # For macOS: Cmd+Shift+2
     # For Windows/Linux: Ctrl+Shift+2
@@ -113,12 +113,41 @@ def main():
         except KeyError:
             pass
     
-    # Set up the keyboard listener
-    with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
-        try:
-            listener.join()
-        except KeyboardInterrupt:
-            print("\nExiting OmniSelect-OCR...")
+    # Create and start the listener
+    listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+    listener.daemon = True
+    listener.start()
+
+
+def main():
+    """
+    Main entry point for the application.
+    Sets up Tesseract, creates an invisible Tkinter root for main thread management,
+    starts the hotkey listener, and runs the main loop watcher.
+    """
+    # Setup Tesseract for the current OS
+    setup_tesseract()
+    
+    print("OmniSelect-OCR is running...")
+    print("Press Cmd+Shift+2 (macOS) or Ctrl+Shift+2 (Windows/Linux) to capture text from screen")
+    print("Close this window to exit")
+    
+    # Create an invisible Tkinter root window for main thread management
+    root = tk.Tk()
+    root.withdraw()  # Hide the window
+    
+    # Start the hotkey listener in a background thread
+    start_hotkey_listener()
+    
+    # Start the main loop watcher on the main thread
+    root.after(100, main_loop_watcher, root)
+    
+    # Run the Tkinter main loop (keeps main thread alive)
+    try:
+        root.mainloop()
+    except KeyboardInterrupt:
+        print("\nExiting OmniSelect-OCR...")
+        root.destroy()
 
 
 if __name__ == "__main__":
